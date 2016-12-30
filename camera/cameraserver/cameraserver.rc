@@ -1,6 +1,7 @@
 service cameraserver /system/bin/cameraserver
     class main
     user cameraserver
+    # media gid needed for /dev/video4*, graphic gid needed for /dev/video5*
     group audio camera input drmrpc media graphics
     ioprio rt 4
     writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks

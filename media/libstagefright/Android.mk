@@ -102,6 +102,10 @@ LOCAL_SHARED_LIBRARIES := \
         libz \
         libpowermanager
 
+ifeq ($(BOARD_CANT_REALLOCATE_OMX_BUFFERS),true)
+LOCAL_CFLAGS += -DBOARD_CANT_REALLOCATE_OMX_BUFFERS
+endif
+
 LOCAL_STATIC_LIBRARIES := \
         libstagefright_color_conversion \
         libyuv_static \
@@ -148,6 +152,24 @@ LOCAL_SHARED_LIBRARIES += \
         libstagefright_foundation \
         libdl \
         libRScpp \
+
+ifeq ($(BOARD_USE_SAMSUNG_CAMERAFORMAT_NV21), true)
+# This needs flag requires the following string constant in
+# CameraParametersExtra.h:
+#
+# const char CameraParameters::PIXEL_FORMAT_YUV420SP_NV21[] = "nv21";
+LOCAL_CFLAGS += -DUSE_SAMSUNG_CAMERAFORMAT_NV21
+endif
+
+ifneq ($(TARGET_USES_MEDIA_EXTENSIONS),true)
+ifeq ($(TARGET_HAS_LEGACY_CAMERA_HAL1),true)
+LOCAL_CFLAGS += -DCAMCORDER_GRALLOC_SOURCE
+endif
+endif
+
+ifeq ($(TARGET_OMX_LEGACY_RESCALING),true)
+LOCAL_CFLAGS += -DUSE_LEGACY_RESCALING
+endif
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wno-error=deprecated-declarations -Wall
 

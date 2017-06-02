@@ -111,6 +111,11 @@ void CameraSourceListener::postRecordingFrameHandleTimestamp(nsecs_t timestamp,
 }
 
 static int32_t getColorFormat(const char* colorFormat) {
+    if (!colorFormat) {
+        ALOGE("Invalid color format");
+        return -1;
+    }
+
     if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV420P)) {
        return OMX_COLOR_FormatYUV420Planar;
     }
@@ -122,6 +127,13 @@ static int32_t getColorFormat(const char* colorFormat) {
     if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV420SP)) {
         return OMX_COLOR_FormatYUV420SemiPlanar;
     }
+
+#ifdef USE_SAMSUNG_CAMERAFORMAT_NV21
+    if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV420SP_NV21)) {
+        static const int OMX_SEC_COLOR_FormatNV21Linear = 0x7F000011;
+        return OMX_SEC_COLOR_FormatNV21Linear;
+    }
+#endif /* USE_SAMSUNG_CAMERAFORMAT_NV21 */
 
     if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV422I)) {
         return OMX_COLOR_FormatYCbYCr;
@@ -313,6 +325,12 @@ status_t CameraSource::isCameraColorFormatSupported(
     return OK;
 }
 
+static int32_t getHighSpeedFrameRate(const CameraParameters& params) {
+    const char* hsr = params.get("video-hsr");
+    int32_t rate = (hsr != NULL && strncmp(hsr, "off", 3)) ? atoi(hsr) : 0;
+    return rate > 240 ? 240 : rate;
+}
+
 /*
  * Configure the camera to use the requested video size
  * (width and height) and/or frame rate. If both width and
@@ -360,11 +378,15 @@ status_t CameraSource::configureCamera(
     }
 
     if (frameRate != -1) {
-        CHECK(frameRate > 0 && frameRate <= 120);
+        CHECK(frameRate > 0 && frameRate <= 240);
         const char* supportedFrameRates =
                 params->get(CameraParameters::KEY_SUPPORTED_PREVIEW_FRAME_RATES);
         CHECK(supportedFrameRates != NULL);
         ALOGV("Supported frame rates: %s", supportedFrameRates);
+        if (getHighSpeedFrameRate(*params)) {
+            ALOGI("Use default 30fps for HighSpeed %dfps", frameRate);
+            frameRate = 30;
+        }
         char buf[4];
         snprintf(buf, 4, "%d", frameRate);
         if (strstr(supportedFrameRates, buf) == NULL) {
@@ -466,6 +488,8 @@ status_t CameraSource::checkFrameRate(
         ALOGE("Failed to retrieve preview frame rate (%d)", frameRateActual);
         return UNKNOWN_ERROR;
     }
+    int32_t highSpeedRate = getHighSpeedFrameRate(params);
+    frameRateActual = highSpeedRate ? highSpeedRate : frameRateActual;
 
     // Check the actual video frame rate against the target/requested
     // video frame rate.
@@ -1250,11 +1274,17 @@ void CameraSource::processBufferQueueFrame(BufferItem& buffer) {
 MetadataBufferType CameraSource::metaDataStoredInVideoBuffers() const {
     ALOGV("metaDataStoredInVideoBuffers");
 
+#ifdef CAMCORDER_GRALLOC_SOURCE
+    return kMetadataBufferTypeGrallocSource;
+#endif
+
     // Output buffers will contain metadata if camera sends us buffer in metadata mode or via
     // buffer queue.
     switch (mVideoBufferMode) {
+#ifndef EXYNOS4_ENHANCEMENTS
         case hardware::ICamera::VIDEO_BUFFER_MODE_DATA_CALLBACK_METADATA:
             return kMetadataBufferTypeNativeHandleSource;
+#endif
         case hardware::ICamera::VIDEO_BUFFER_MODE_BUFFER_QUEUE:
             return kMetadataBufferTypeANWBuffer;
         default:

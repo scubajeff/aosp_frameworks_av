@@ -19,6 +19,7 @@
 
 #include <utils/KeyedVector.h>
 #include <utils/String8.h>
+#include <camera/CameraParametersExtra.h>
 
 namespace android {
 
@@ -37,23 +38,6 @@ struct Size {
     }
 };
 
-//+++>
-class DurationTimer {
-public:
-    DurationTimer() {}
-    ~DurationTimer() {}
-    void start();
-    void stop();
-    long long durationUsecs() const;
-    static long long subtractTimevals(const struct timeval* ptv1,
-        const struct timeval* ptv2);
-    static void addToTimeval(struct timeval* ptv, long usec);
-private:
-    struct timeval  mStartWhen;
-    struct timeval  mStopWhen;
-};
-//--->
-
 class CameraParameters
 {
 public:
@@ -69,9 +53,6 @@ public:
     void setFloat(const char *key, float value);
     const char *get(const char *key) const;
     int getInt(const char *key) const;
-    //+++>
-    int getInt64(const char *key) const;
-    //--->
     float getFloat(const char *key) const;
 
     void remove(const char *key);
@@ -703,15 +684,9 @@ public:
     // High-dynamic range mode
     static const char LIGHTFX_HDR[];
 
-    //+++>
-    static const char KEY_CITYID[];
-    static const char KEY_WEATHER[];
-    static const char ISO_AUTO[];
-    static const char ISO_100[];
-    static const char ISO_200[];
-    static const char ISO_400[];
-    static const char ISO_800[];
-    //--->
+#ifdef CAMERA_PARAMETERS_EXTRA_H
+CAMERA_PARAMETERS_EXTRA_H
+#endif
 
     /**
      * Returns the the supported preview formats as an enum given in graphics.h

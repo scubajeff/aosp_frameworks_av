@@ -804,13 +804,22 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
             } else if (type == kMetadataBufferTypeNativeHandleSource) {
                 bufSize = sizeof(VideoNativeHandleMetadata);
             }
+#ifdef CAMCORDER_GRALLOC_SOURCE
+            else if (type == kMetadataBufferTypeGrallocSource) {
+                bufSize = sizeof(VideoGrallocMetadata);
+            }
+#endif
 
             // If using gralloc or native source input metadata buffers, allocate largest
             // metadata size as we prefer to generate native source metadata, but component
             // may require gralloc source. For camera source, allocate at least enough
             // size for native metadata buffers.
             size_t allottedSize = bufSize;
+#ifdef CAMCORDER_GRALLOC_SOURCE
+            if (portIndex == kPortIndexInput && type >= kMetadataBufferTypeGrallocSource) {
+#else
             if (portIndex == kPortIndexInput && type == kMetadataBufferTypeANWBuffer) {
+#endif
                 bufSize = max(sizeof(VideoGrallocMetadata), sizeof(VideoNativeMetadata));
             } else if (portIndex == kPortIndexInput && type == kMetadataBufferTypeCameraSource) {
                 bufSize = max(bufSize, sizeof(VideoNativeMetadata));
@@ -983,15 +992,44 @@ status_t ACodec::setupNativeWindowSizeFormatAndUsage(
     memset(&mLastNativeWindowCrop, 0, sizeof(mLastNativeWindowCrop));
     mLastNativeWindowDataSpace = HAL_DATASPACE_UNKNOWN;
 
+#ifdef USE_SAMSUNG_COLORFORMAT
+    OMX_COLOR_FORMATTYPE eNativeColorFormat = def.format.video.eColorFormat;
+    setNativeWindowColorFormat(eNativeColorFormat);
+#endif
+
     ALOGV("gralloc usage: %#x(OMX) => %#x(ACodec)", omxUsage, usage);
-    return setNativeWindowSizeFormatAndUsage(
+    err = setNativeWindowSizeFormatAndUsage(
             nativeWindow,
             def.format.video.nFrameWidth,
             def.format.video.nFrameHeight,
+#ifdef USE_SAMSUNG_COLORFORMAT
+            eNativeColorFormat,
+#else
             def.format.video.eColorFormat,
+#endif
             mRotationDegrees,
             usage,
             reconnect);
+#ifdef QCOM_HARDWARE
+    if (err == OK) {
+        OMX_CONFIG_RECTTYPE rect;
+        InitOMXParams(&rect);
+        rect.nPortIndex = kPortIndexOutput;
+        err = mOMX->getConfig(
+                mNode, OMX_IndexConfigCommonOutputCrop, &rect, sizeof(rect));
+        if (err == OK) {
+            ALOGV("rect size = %d, %d, %d, %d", rect.nLeft, rect.nTop, rect.nWidth, rect.nHeight);
+            android_native_rect_t crop;
+            crop.left = rect.nLeft;
+            crop.top = rect.nTop;
+            crop.right = rect.nLeft + rect.nWidth - 1;
+            crop.bottom = rect.nTop + rect.nHeight - 1;
+            ALOGV("crop update (%d, %d), (%d, %d)", crop.left, crop.top, crop.right, crop.bottom);
+            err = native_window_set_crop(nativeWindow, &crop);
+        }
+    }
+#endif
+    return err;
 }
 
 status_t ACodec::configureOutputBuffersFromNativeWindow(
@@ -1765,6 +1803,14 @@ status_t ACodec::configureCodec(
             // IOMX translates ANWBuffers to gralloc source already.
             mInputMetadataType = (MetadataBufferType)storeMeta;
         }
+
+#ifdef CAMCORDER_GRALLOC_SOURCE
+        // For this specific case we could be using camera source even if storeMetaDataInBuffers
+        // returns Gralloc source. Pretend that we are; this will force us to use nBufferSize.
+        if (mInputMetadataType == kMetadataBufferTypeGrallocSource) {
+            mInputMetadataType = kMetadataBufferTypeCameraSource;
+        }
+#endif
 
         uint32_t usageBits;
         if (mOMX->getParameter(
@@ -6036,6 +6082,9 @@ void ACodec::BaseState::onInputBufferFilled(const sp<AMessage> &msg) {
                 status_t err2 = OK;
                 switch (metaType) {
                 case kMetadataBufferTypeInvalid:
+#ifdef CAMCORDER_GRALLOC_SOURCE
+                case kMetadataBufferTypeCameraSource:
+#endif
                     break;
 #ifndef OMX_ANDROID_COMPILE_AS_32BIT_ON_64BIT_PLATFORMS
                 case kMetadataBufferTypeNativeHandleSource:
@@ -6267,6 +6316,10 @@ bool ACodec::BaseState::onOMXFillBufferDone(
                 native_handle_t *handle = NULL;
                 VideoNativeHandleMetadata &nativeMeta =
                     *(VideoNativeHandleMetadata *)info->mData->data();
+#ifdef CAMCORDER_GRALLOC_SOURCE
+                VideoGrallocMetadata &grallocMeta =
+                    *(VideoGrallocMetadata *)info->mData->data();
+#endif
                 if (info->mData->size() >= sizeof(nativeMeta)
                         && nativeMeta.eType == kMetadataBufferTypeNativeHandleSource) {
 #ifdef OMX_ANDROID_COMPILE_AS_32BIT_ON_64BIT_PLATFORMS
@@ -6276,6 +6329,12 @@ bool ACodec::BaseState::onOMXFillBufferDone(
                     handle = (native_handle_t *)nativeMeta.pHandle;
 #endif
                 }
+#ifdef CAMCORDER_GRALLOC_SOURCE
+                else if (info->mData->size() >= sizeof(grallocMeta)
+                        && grallocMeta.eType == kMetadataBufferTypeGrallocSource) {
+                    handle = (native_handle_t *)(uintptr_t)grallocMeta.pHandle;
+                }
+#endif
                 info->mData->meta()->setPointer("handle", handle);
                 info->mData->meta()->setInt32("rangeOffset", rangeOffset);
                 info->mData->meta()->setInt32("rangeLength", rangeLength);
@@ -6968,10 +7027,12 @@ void ACodec::LoadedState::onCreateInputSurface(
         err = mCodec->mOMX->createInputSurface(
                 mCodec->mNode, kPortIndexInput, dataSpace, &bufferProducer,
                 &mCodec->mInputMetadataType);
+#ifndef CAMCORDER_GRALLOC_SOURCE
         // framework uses ANW buffers internally instead of gralloc handles
         if (mCodec->mInputMetadataType == kMetadataBufferTypeGrallocSource) {
             mCodec->mInputMetadataType = kMetadataBufferTypeANWBuffer;
         }
+#endif
     }
 
     if (err == OK) {
@@ -7014,10 +7075,12 @@ void ACodec::LoadedState::onSetInputSurface(
         err = mCodec->mOMX->setInputSurface(
                 mCodec->mNode, kPortIndexInput, surface->getBufferConsumer(),
                 &mCodec->mInputMetadataType);
+#ifndef CAMCORDER_GRALLOC_SOURCE
         // framework uses ANW buffers internally instead of gralloc handles
         if (mCodec->mInputMetadataType == kMetadataBufferTypeGrallocSource) {
             mCodec->mInputMetadataType = kMetadataBufferTypeANWBuffer;
         }
+#endif
     }
 
     if (err == OK) {
@@ -7725,6 +7788,15 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
                     return false;
                 }
 
+#ifdef USE_LEGACY_RESCALING
+                // Resolution is about to change
+                // Make sure the decoder knows
+                sp<AMessage> reply = new AMessage(kWhatOutputBufferDrained, mCodec);
+                mCodec->onOutputFormatChanged();
+                mCodec->addKeyFormatChangesToRenderBufferNotification(reply);
+                mCodec->sendFormatChange();
+#endif
+
                 ALOGV("[%s] Output port now reenabled.", mCodec->mComponentName.c_str());
 
                 if (mCodec->mExecutingState->active()) {
@@ -7738,6 +7810,15 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
 
             return false;
         }
+
+#ifdef USE_LEGACY_RESCALING
+        case OMX_EventPortSettingsChanged:
+            // Exynos OMX wants to share its' output crop
+            // For some reason trying to handle this here doesn't do anything
+            // We'll do it right before transitioning to ExecutingState
+            return true;
+        break;
+#endif
 
         default:
             return false;
